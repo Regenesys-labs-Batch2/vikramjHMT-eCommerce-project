@@ -1,0 +1,10 @@
+# Dependabot proposes newer GitHub Actions versions as pull requests.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci                # titles become 'ci: bump ...', which passes the pr-title check

@@ -1,0 +1,12 @@
+target/
+data/
+logs/
+.env
+*.log
+.vscode/
+.idea/
+*.iml
+smoke-results.txt
+concurrency-results.txt
+timeout-results.txt
+payment-down-results.txt

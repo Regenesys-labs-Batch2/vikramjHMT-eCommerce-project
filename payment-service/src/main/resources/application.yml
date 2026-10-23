@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: payment-service
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  datasource:
+    url: jdbc:h2:file:./data/paymentdb;AUTO_SERVER=FALSE;LOCK_TIMEOUT=10000
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+server:
+  port: ${SERVER_PORT:8086}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+ecom:
+  jwt:
+    secret: ${JWT_SECRET:change-me-this-is-only-a-local-dev-secret-0123456789}
+    expiry-minutes: ${JWT_EXPIRY_MINUTES:60}
+  seed:
+    admin-password: ${SEED_ADMIN_PASSWORD:Admin#12345}
+  payment:
+    simulated-timeout-ms: ${PAYMENT_SIMULATED_TIMEOUT_MS:5000}
+  clients:
+    connect-timeout-ms: ${CLIENT_CONNECT_TIMEOUT_MS:1000}
+    read-timeout-ms: ${CLIENT_READ_TIMEOUT_MS:2000}
+    identity-url: ${IDENTITY_URL:http://localhost:8081}
+    catalog-url: ${CATALOG_URL:http://localhost:8082}
+    inventory-url: ${INVENTORY_URL:http://localhost:8083}
+    cart-url: ${CART_URL:http://localhost:8084}
+    order-url: ${ORDER_URL:http://localhost:8085}
+    payment-url: ${PAYMENT_URL:http://localhost:8086}
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [${spring.application.name}] [%X{correlationId:-}] %logger{36} - %msg%n"

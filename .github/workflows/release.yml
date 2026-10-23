@@ -1,0 +1,78 @@
+name: release
+
+# Tag <service>-vMAJOR.MINOR.PATCH (for example identity-service-v1.0.0) on a commit of main.
+on:
+  push:
+    tags: [ '*-service-v*.*.*' ]
+
+permissions:
+  contents: write              # needed to publish the GitHub Release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the tagged commit with its history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Release rules - tag <service>-vMAJOR.MINOR.PATCH on a commit of main
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^(identity|catalog|inventory|cart|order|payment)-service-v([0-9]+\.[0-9]+\.[0-9]+)$ ]] \
+            || { echo "::error::$GITHUB_REF_NAME is not <service>-service-vMAJOR.MINOR.PATCH"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+          echo "SERVICE=${BASH_REMATCH[1]}-service" >> "$GITHUB_ENV"
+          echo "VERSION=${BASH_REMATCH[2]}" >> "$GITHUB_ENV"
+
+      - name: Set up Java 21 (Temurin) with Maven dependency cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: '*/pom.xml'
+
+      - name: Build, test and package the release version
+        working-directory: ${{ env.SERVICE }}
+        run: mvn -B -ntp -Drevision="$VERSION" verify
+
+      - name: Check the JAR name and its build information
+        working-directory: ${{ env.SERVICE }}
+        run: |
+          JAR=$(ls target/*-"$VERSION".jar 2>/dev/null | head -1)
+          [ -n "$JAR" ] || { echo "::error::no target/*-$VERSION.jar - the POM version must be \${revision}"; exit 1; }
+          unzip -p "$JAR" '*/build-info.properties' | tee build-info.txt
+          grep -q "^build.version=$VERSION$" build-info.txt || { echo "::error::build-info missing - add the build-info goal"; exit 1; }
+          (cd target && sha256sum "$(basename "$JAR")" > SHA256SUMS)
+          echo "JAR=$SERVICE/$JAR" >> "$GITHUB_ENV"
+          echo "SUMS=$SERVICE/target/SHA256SUMS" >> "$GITHUB_ENV"
+
+      - name: Release notes (commits that touched the service since its previous tag)
+        run: |
+          PREV=$(git describe --tags --abbrev=0 --match "$SERVICE-v*.*.*" "$GITHUB_SHA^" 2>/dev/null || true)
+          {
+            [ -f "docs/releases/$SERVICE-v$VERSION.md" ] && cat "docs/releases/$SERVICE-v$VERSION.md" && echo
+            echo "## Commits since ${PREV:-the first commit}"
+            git log --no-merges --pretty='- %s (%h)' "${PREV:+$PREV..}$GITHUB_SHA" -- "$SERVICE"
+            echo
+            echo "Artifact $(basename "$JAR"), SHA-256 in SHA256SUMS, built by run $GITHUB_RUN_ID from $GITHUB_SHA."
+          } > release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the GitHub Release (JAR, SHA256SUMS, notes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$JAR" "$SUMS" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$JAR" "$SUMS" --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md --verify-tag
+          fi
+          echo "Released $GITHUB_REF_NAME: $(cat "$SUMS")" >> "$GITHUB_STEP_SUMMARY"

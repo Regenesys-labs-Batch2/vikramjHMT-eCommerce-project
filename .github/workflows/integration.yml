@@ -1,0 +1,130 @@
+name: integration
+
+# Starts all six services as plain JARs on the runner and runs the end-to-end business scenarios.
+on:
+  workflow_dispatch:
+    inputs:
+      inject_failure:
+        description: Failure to inject
+        type: choice
+        options: [ none, payment_down ]
+        default: none
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  JWT_SECRET: ${{ secrets.JWT_SECRET }}
+  SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
+  IDENTITY_URL: http://localhost:8081
+  CATALOG_URL: http://localhost:8082
+  INVENTORY_URL: http://localhost:8083
+  CART_URL: http://localhost:8084
+  ORDER_URL: http://localhost:8085
+  PAYMENT_URL: http://localhost:8086
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Require the JWT secret
+        run: |
+          if [ -z "$JWT_SECRET" ]; then
+            echo "Repository secret JWT_SECRET (at least 32 characters) is required" >&2
+            exit 1
+          fi
+
+      - name: Set up Java 21 with Maven cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: '*-service/pom.xml'
+
+      - name: Package the six services (tests already run in each service CI)
+        run: |
+          set -e
+          for s in identity catalog inventory cart order payment; do
+            echo "::group::package $s"
+            (cd $s-service && mvn -B -ntp -DskipTests package)
+            echo "::endgroup::"
+          done
+
+      - name: Start services in dependency order and wait for readiness
+        run: |
+          set -e
+          mkdir -p logs pids
+          start() {  # name port
+            echo "starting $1 on $2"
+            (cd $1-service && SERVER_PORT=$2 nohup java -jar target/$1-service-*.jar > ../logs/$1.log 2>&1 & echo $! > ../pids/$1.pid)
+          }
+          wait_up() {  # port
+            for i in $(seq 1 45); do
+              if curl -sf "http://localhost:$1/actuator/health" | grep -q '"UP"'; then echo "port $1 UP"; return 0; fi
+              sleep 2
+            done
+            echo "port $1 NOT READY"; return 1
+          }
+          start identity 8081;  wait_up 8081
+          start catalog 8082;   wait_up 8082
+          start inventory 8083; wait_up 8083
+          start cart 8084;      wait_up 8084
+          if [ "${{ inputs.inject_failure }}" = "payment_down" ]; then
+            start payment 9999; wait_up 9999   # Order still points at 8086, so Payment is unreachable
+          else
+            start payment 8086; wait_up 8086
+          fi
+          start order 8085;     wait_up 8085
+
+      - name: Smoke tests (business scenarios)
+        if: inputs.inject_failure == 'none'
+        run: bash scripts/smoke-test.sh | tee smoke-results.txt
+
+      - name: Concurrency test (ten buyers, one unit)
+        if: inputs.inject_failure == 'none'
+        run: bash scripts/concurrency-test.sh | tee concurrency-results.txt
+
+      - name: Inventory-down scenario
+        if: inputs.inject_failure == 'none'
+        run: |
+          kill "$(cat pids/inventory.pid)" || true
+          sleep 3
+          bash scripts/smoke-test.sh timeout | tee timeout-results.txt
+
+      - name: Payment-down scenario (operational failure for root-cause analysis)
+        if: inputs.inject_failure == 'payment_down'
+        continue-on-error: true
+        run: bash scripts/smoke-test.sh | tee payment-down-results.txt
+
+      - name: Summarise results
+        if: always()
+        run: |
+          echo "## Integration results" >> "$GITHUB_STEP_SUMMARY"
+          for f in smoke-results.txt concurrency-results.txt timeout-results.txt payment-down-results.txt; do
+            [ -f "$f" ] && { echo "### $f" >> "$GITHUB_STEP_SUMMARY"; grep -E '^(PASS|FAIL|RESULT)' "$f" >> "$GITHUB_STEP_SUMMARY" || true; }
+          done
+
+      - name: Stop services
+        if: always()
+        run: |
+          for f in pids/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; done
+
+      - name: Upload service logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-logs
+          path: |
+            logs/
+            *-results.txt
+          retention-days: 3
+          if-no-files-found: ignore

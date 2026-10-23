@@ -1,0 +1,105 @@
+name: service-ci
+
+# Reusable pipeline: build, unit test, integration test (Failsafe *IT) and package one service.
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Service folder, for example identity-service
+        type: string
+        required: true
+      java-version:
+        type: string
+        default: '21'
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: "Pull-request title follows '<type>: <summary>'"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}   # passed as data, never pasted into the script
+        run: |
+          if [[ "$TITLE" =~ ^(feat|fix|test|docs|refactor|chore|ci):\ .+ ]]; then
+            echo "PR title OK: $TITLE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::PR title '$TITLE' must be '<type>: <summary>' (feat fix test docs refactor chore ci)"
+            exit 1
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ${{ inputs.service }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java with Maven dependency cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+          cache-dependency-path: ${{ inputs.service }}/pom.xml
+
+      - name: Show tool versions
+        run: |
+          java -version
+          mvn -version
+
+      - name: Build, unit test, integration test and package
+        run: mvn -B -ntp -U verify
+
+      - name: Summarise test results
+        if: always()
+        run: |
+          echo "## Test results (${{ inputs.service }})" >> "$GITHUB_STEP_SUMMARY"
+          total=0; failed=0; errors=0; skipped=0
+          for f in target/surefire-reports/TEST-*.xml target/failsafe-reports/TEST-*.xml; do
+            [ -f "$f" ] || continue
+            t=$(grep -o 'tests="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*' || true); total=$((total+${t:-0}))
+            fl=$(grep -o 'failures="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*' || true); failed=$((failed+${fl:-0}))
+            e=$(grep -o 'errors="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*' || true); errors=$((errors+${e:-0}))
+            s=$(grep -o 'skipped="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*' || true); skipped=$((skipped+${s:-0}))
+          done
+          echo "Tests: $total, Failures: $failed, Errors: $errors, Skipped: $skipped" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Traceability report (report only; never fails the build)
+        if: always()
+        run: |
+          case "${{ inputs.service }}" in
+            identity*) p=IDN ;; catalog*) p=CAT ;; inventory*) p=INV ;;
+            cart*) p=CART ;; order*) p=ORD ;; payment*) p=PAY ;; *) p=NONE ;;
+          esac
+          defined=$(cat ../docs/business-rules.md ../docs/acceptance-criteria.md 2>/dev/null | grep -oE "(R|AC)-$p-[0-9]+" | sort -u || true)
+          tested=$(grep -rhoE "(R|AC)-$p-[0-9]+" src/test 2>/dev/null | sort -u || true)
+          missing=$(comm -23 <(printf '%s\n' "$defined") <(printf '%s\n' "$tested") | grep . | tr '\n' ' ' || true)
+          echo "## Traceability ($p)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Not yet referenced by any test: ${missing:-none}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ inputs.service }}
+          path: |
+            ${{ inputs.service }}/target/surefire-reports/
+            ${{ inputs.service }}/target/failsafe-reports/
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Upload executable JAR
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar-${{ inputs.service }}
+          path: ${{ inputs.service }}/target/*.jar
+          retention-days: 3
