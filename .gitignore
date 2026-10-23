@@ -3,6 +3,8 @@ data/
 logs/
 .env
 *.log
+*.mv.db
+*.trace.db
 .vscode/
 .idea/
 *.iml
