@@ -11,6 +11,7 @@ Every service is an independent Maven project with its own H2 database; there is
 | `cart-service` | 8084 | Cart, pricing, discounts, checkout summary |
 | `order-service` | 8085 | Checkout saga, order states, cancellation, recovery |
 | `payment-service` | 8086 | Simulated payments and refunds |
+| `frontend` | 4200 | Angular storefront and admin UI (see `frontend/README.md`) |
 
 Documentation is in `docs/` (architecture, API contracts, business rules, acceptance criteria, engineering standards).
 
@@ -46,6 +47,7 @@ with the JAR, `SHA256SUMS` and notes. Local and CI builds use `0.1.0-SNAPSHOT`; 
 | `INVENTORY_RESERVATION_TTL_MINUTES` | 15 | inventory |
 | `PAYMENT_SIMULATED_TIMEOUT_MS` | 5000 | payment |
 | `ORDER_RECOVERY_INTERVAL_MS` | 60000 | order |
+| `ECOM_CORS_ALLOWED_ORIGINS` | `http://localhost:4200` | all services (comma-separated browser origins) |
 
 Start order for a manual run: identity, catalog, inventory, cart, payment, order; each exposes
 `/actuator/health`. Runtime data is written to `./data/<service>db` (git-ignored).
