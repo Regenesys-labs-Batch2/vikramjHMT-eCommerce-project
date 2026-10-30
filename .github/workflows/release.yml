@@ -31,7 +31,7 @@ jobs:
           echo "VERSION=${BASH_REMATCH[2]}" >> "$GITHUB_ENV"
 
       - name: Set up Java 21 (Temurin) with Maven dependency cache
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
